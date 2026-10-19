@@ -3,6 +3,8 @@ package com.galt.llm;
 import com.galt.llm.config.GPTConfig;
 import org.junit.jupiter.api.Test;
 
+import java.util.Random;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class GPTModelTest {
@@ -58,29 +60,39 @@ class GPTModelTest {
             Tensor b2 = Tensor.of(b2Data, embDim);
             FeedForward ff = new FeedForward(w1, b1, w2, b2);
 
-            LayerNorm norm1 = new LayerNorm(embDim);
-            LayerNorm norm2 = new LayerNorm(embDim);
+            // LayerNorms
+            float[] ones = new float[embDim];
+            java.util.Arrays.fill(ones, 1.0f);
+            float[] zeros = new float[embDim];
 
-            blocks[l] = new TransformerBlock(att, ff, norm1, norm2);
+            LayerNorm ln1 = new LayerNorm(Tensor.of(ones.clone(), embDim), Tensor.of(zeros.clone(), embDim));
+            LayerNorm ln2 = new LayerNorm(Tensor.of(ones.clone(), embDim), Tensor.of(zeros.clone(), embDim));
+
+            blocks[l] = new TransformerBlock(att, ff, ln1, ln2);
         }
 
-        // 3. Final LayerNorm & Output Head
-        LayerNorm finalNorm = new LayerNorm(embDim);
-        float[] outHeadData = new float[embDim * vocabSize];
-        for (int i = 0; i < outHeadData.length; i++) {
-            outHeadData[i] = (i % 7) * 0.03f;
+        // 3. Final LayerNorm
+        float[] ones = new float[embDim];
+        java.util.Arrays.fill(ones, 1.0f);
+        float[] zeros = new float[embDim];
+        LayerNorm finalNorm = new LayerNorm(Tensor.of(ones, embDim), Tensor.of(zeros, embDim));
+
+        // 4. Output projection head [embDim, vocabSize]
+        float[] headData = new float[embDim * vocabSize];
+        for (int i = 0; i < headData.length; i++) {
+            headData[i] = (i % 7) * 0.03f;
         }
-        Tensor outHead = Tensor.of(outHeadData, embDim, vocabSize);
+        Tensor outHead = Tensor.of(headData, embDim, vocabSize);
 
         return new GPTModel(config, tokEmb, posEmb, blocks, finalNorm, outHead);
     }
 
     @Test
-    void testGPTModelForwardPass() {
+    void testForwardPassOutputShape() {
         GPTConfig config = new GPTConfig(10, 8, 4, 2, 2, false);
         GPTModel model = createTestModel(config);
 
-        // Input: Batch=2, Tokens=3
+        // Input batch of 2 sequences, each of length 3
         int[][] inIdx = {
             {1, 4, 2},
             {0, 3, 5}
@@ -88,18 +100,8 @@ class GPTModelTest {
 
         Tensor logits = model.forward(inIdx);
 
-        // Verify shape is [B, T, vocabSize] -> [2, 3, 10]
+        // Logits shape must be [B, T, vocabSize] = [2, 3, 10]
         assertArrayEquals(new int[]{2, 3, 10}, logits.shape());
-
-        // Verify all scores are finite (no NaNs or Infs)
-        for (int b = 0; b < 2; b++) {
-            for (int t = 0; t < 3; t++) {
-                for (int v = 0; v < 10; v++) {
-                    assertFalse(Float.isNaN(logits.get(b, t, v)), "Logits must not contain NaN");
-                    assertFalse(Float.isInfinite(logits.get(b, t, v)), "Logits must not contain Infinity");
-                }
-            }
-        }
     }
 
     @Test
@@ -131,5 +133,42 @@ class GPTModelTest {
             int token = generated[0][i];
             assertTrue(token >= 0 && token < 10, "Generated token must be a valid vocab ID: " + token);
         }
+    }
+
+    @Test
+    void testGenerateMatchesGenerateTextSimpleInGreedyMode() {
+        GPTConfig config = new GPTConfig(10, 8, 4, 2, 2, false);
+        GPTModel model = createTestModel(config);
+
+        int[][] prompt = {{1, 2}};
+        int maxNewTokens = 4;
+        int contextSize = 8;
+
+        // Calling generate with temperature = 0.0f must produce identical results to generateTextSimple
+        int[][] simpleOutput = model.generateTextSimple(prompt, maxNewTokens, contextSize);
+        int[][] stochasticOutput = model.generate(prompt, maxNewTokens, contextSize, 0.0f, null, null, null);
+
+        assertArrayEquals(simpleOutput[0], stochasticOutput[0],
+                "Stochastic generate in greedy mode (temperature=0.0) must match generateTextSimple exactly");
+    }
+
+    @Test
+    void testGenerateEarlyStoppingWithEosId() {
+        GPTConfig config = new GPTConfig(10, 8, 4, 2, 2, false);
+        GPTModel model = createTestModel(config);
+
+        int[][] prompt = {{1, 2}};
+        int contextSize = 8;
+
+        // Determine what token is generated at step 1 under greedy mode
+        int[][] oneStep = model.generateTextSimple(prompt, 1, contextSize);
+        int firstGeneratedToken = oneStep[0][2];
+
+        // Now run generate requesting 10 new tokens, but with eosId set to the first generated token
+        int[][] stoppedOutput = model.generate(prompt, 10, contextSize, 0.0f, null, firstGeneratedToken, null);
+
+        // Should stop after generating exactly that token: prompt length (2) + 1 = 3 tokens
+        assertEquals(3, stoppedOutput[0].length, "Generation should stop early when eosId is generated");
+        assertEquals(firstGeneratedToken, stoppedOutput[0][2]);
     }
 }

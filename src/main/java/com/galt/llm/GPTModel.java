@@ -2,6 +2,8 @@ package com.galt.llm;
 
 import com.galt.llm.config.GPTConfig;
 
+import java.util.random.RandomGenerator;
+
 public class GPTModel {
     private final GPTConfig gptConfig;
     private final Tensor tokenEmb;
@@ -97,6 +99,89 @@ public class GPTModel {
             }
 
             currIdx = nextIdx;
+        }
+
+        return currIdx;
+    }
+
+    /**
+     * Autoregressive text generation with Temperature scaling, Top-k filtering,
+     * and multinomial sampling (or deterministic greedy argmax if temperature == 0.0).
+     *
+     * @param idx          initial prompt token IDs of shape [B, T]
+     * @param maxNewTokens maximum number of new tokens to generate
+     * @param contextSize  maximum context window size (crops from the left if exceeded)
+     * @param temperature  scaling factor for randomness (0.0 = deterministic greedy argmax)
+     * @param topK         optional integer to restrict sampling to the top-k highest logits (null = disabled)
+     * @param eosId        optional end-of-sequence token ID to terminate generation early (null = disabled)
+     * @param rng          random number generator for inverse-CDF multinomial sampling (can be null if temperature == 0.0)
+     * @return 2D integer array of generated tokens containing the original prompt plus new tokens
+     */
+    public int[][] generate(
+            int[][] idx,
+            int maxNewTokens,
+            int contextSize,
+            float temperature,
+            Integer topK,
+            Integer eosId,
+            RandomGenerator rng
+    ) {
+        int B = idx.length;
+        int[][] currIdx = new int[B][];
+        for (int b = 0; b < B; b++) {
+            currIdx[b] = idx[b].clone();
+        }
+
+        for (int step = 0; step < maxNewTokens; step++) {
+            int currentLength = currIdx[0].length;
+
+            // 1. Crop context to contextSize if current sequence length exceeds it
+            int startIndex = Math.max(0, currentLength - contextSize);
+            int condLength = currentLength - startIndex;
+            int[][] idxCond = new int[B][condLength];
+            for (int b = 0; b < B; b++) {
+                System.arraycopy(currIdx[b], startIndex, idxCond[b], 0, condLength);
+            }
+
+            // 2. Forward pass to get unnormalized vocabulary logits [B, condLength, vocabSize]
+            Tensor logits = this.forward(idxCond);
+            int lastTime = condLength - 1;
+
+            // 3. For each batch item, extract last-step logits, apply Top-k, and sample next token
+            int[][] nextIdx = new int[B][currentLength + 1];
+            boolean allFinished = (eosId != null);
+
+            for (int b = 0; b < B; b++) {
+                // Extract 1D logits for the last token position
+                float[] lastLogits = new float[gptConfig.vocabSize()];
+                for (int v = 0; v < gptConfig.vocabSize(); v++) {
+                    lastLogits[v] = logits.get(b, lastTime, v);
+                }
+
+                // Apply Top-k filtering if specified (overwrites non-top-k logits with -Infinity)
+                if (topK != null) {
+                    SamplingUtils.applyTopK(lastLogits, topK);
+                }
+
+                // Sample next token (handles temperature scaling, softmax, and inverse-CDF sampling)
+                int nextToken = SamplingUtils.sample(lastLogits, temperature, rng);
+
+                // Copy existing sequence and append newly generated token
+                System.arraycopy(currIdx[b], 0, nextIdx[b], 0, currentLength);
+                nextIdx[b][currentLength] = nextToken;
+
+                // Check for early stopping condition
+                if (eosId != null && nextToken != eosId) {
+                    allFinished = false;
+                }
+            }
+
+            currIdx = nextIdx;
+
+            // If an EOS token was specified and all batch sequences generated it, terminate early
+            if (allFinished) {
+                break;
+            }
         }
 
         return currIdx;
