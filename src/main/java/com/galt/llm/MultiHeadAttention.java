@@ -2,9 +2,13 @@ package com.galt.llm;
 
 public class MultiHeadAttention {
     private final Tensor wQuery;
+    private final Tensor bQuery;
     private final Tensor wKey;
+    private final Tensor bKey;
     private final Tensor wValue;
+    private final Tensor bValue;
     private final Tensor outProj;
+    private final Tensor bOutProj;
     private final int numHeads;
     private final int headDim;
     private final int dOut;
@@ -13,11 +17,23 @@ public class MultiHeadAttention {
                               Tensor wKey,
                               Tensor wValue,
                               Tensor outProj,
-                              int numHeads){
+                              int numHeads) {
+        this(wQuery, null, wKey, null, wValue, null, outProj, null, numHeads);
+    }
+
+    public MultiHeadAttention(Tensor wQuery, Tensor bQuery,
+                              Tensor wKey, Tensor bKey,
+                              Tensor wValue, Tensor bValue,
+                              Tensor outProj, Tensor bOutProj,
+                              int numHeads) {
         this.wQuery = wQuery;
+        this.bQuery = bQuery;
         this.wKey = wKey;
+        this.bKey = bKey;
         this.wValue = wValue;
+        this.bValue = bValue;
         this.outProj = outProj;
+        this.bOutProj = bOutProj;
         this.numHeads = numHeads;
         this.dOut = wQuery.shape()[1];
 
@@ -27,14 +43,23 @@ public class MultiHeadAttention {
         this.headDim = dOut / numHeads;
     }
 
-    public Tensor forward(Tensor x, boolean causalMask){
+    public Tensor forward(Tensor x, boolean causalMask) {
         int B = x.shape()[0];
         int T = x.shape()[1];
 
         // Step 1: Project [B, T, d_in] @ [d_in, d_out] -> [B, T, d_out]
         Tensor Q = x.matmul(wQuery);
+        if (bQuery != null) {
+            Q = Q.addBias(bQuery);
+        }
         Tensor K = x.matmul(wKey);
+        if (bKey != null) {
+            K = K.addBias(bKey);
+        }
         Tensor V = x.matmul(wValue);
+        if (bValue != null) {
+            V = V.addBias(bValue);
+        }
 
         // Step 2: Unroll heads -> [B, T, numHeads, headDim]
         Q = Q.view(B, T, numHeads, headDim);
@@ -80,6 +105,10 @@ public class MultiHeadAttention {
         context = context.contiguous().view(B, T, dOut);
 
         // Step 9: Final output projection [B, T, dOut] @ [dOut, dOut] -> [B, T, dOut]
-        return context.matmul(outProj);
+        Tensor projected = context.matmul(outProj);
+        if (bOutProj != null) {
+            projected = projected.addBias(bOutProj);
+        }
+        return projected;
     }
 }
