@@ -2,11 +2,11 @@ package com.galt.llm;
 
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
 class MainTest {
     @Test
-    void contextLoads() {
-        assertTrue(true, "Project setup verified.");
+    void mainExecutesCleanly() {
+        assertDoesNotThrow(() -> Main.main(new String[0]));
     }
 }
