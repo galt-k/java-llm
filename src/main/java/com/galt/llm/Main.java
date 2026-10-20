@@ -2,13 +2,10 @@ package com.galt.llm;
 
 import com.galt.llm.config.GPTConfig;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Random;
+import java.util.*;
 
 /**
- * Live demonstration of the pure Java 21+ GPT-2 Architecture,
- * Evaluation Engine (Cross-Entropy & Perplexity), and Stochastic Decoding Engine.
+ * Live demonstration and Interactive CLI REPL for the pure Java 21+ GPT-2 Engine.
  */
 public class Main {
 
@@ -27,19 +24,19 @@ public class Main {
         System.out.println("    - Number of Layers: " + gpt2Config.nLayers() + " Transformer blocks");
         System.out.println("    - FeedForward Dim : " + (4 * gpt2Config.embDim()) + " (4x expansion)");
 
-        // 2. Demo Vocabulary Mapping (Section 5.3)
-        // Mapping token IDs to human-readable words
-        Map<Integer, String> vocab = new HashMap<>();
-        vocab.put(0, "closer");
-        vocab.put(1, "every");
-        vocab.put(2, "effort");
-        vocab.put(3, "forward");
-        vocab.put(4, "inches");
-        vocab.put(5, "moves");
-        vocab.put(6, "pizza");
-        vocab.put(7, "toward");
-        vocab.put(8, "you");
-        vocab.put(9, "<eos>");
+        // 2. Demo Vocabulary Mapping
+        Map<Integer, String> idToWord = new HashMap<>();
+        Map<String, Integer> wordToId = new HashMap<>();
+        registerToken(idToWord, wordToId, 0, "closer");
+        registerToken(idToWord, wordToId, 1, "every");
+        registerToken(idToWord, wordToId, 2, "effort");
+        registerToken(idToWord, wordToId, 3, "forward");
+        registerToken(idToWord, wordToId, 4, "inches");
+        registerToken(idToWord, wordToId, 5, "moves");
+        registerToken(idToWord, wordToId, 6, "pizza");
+        registerToken(idToWord, wordToId, 7, "toward");
+        registerToken(idToWord, wordToId, 8, "you");
+        registerToken(idToWord, wordToId, 9, "<eos>");
 
         int vocabSize = 10;
         int contextLength = 16;
@@ -52,52 +49,151 @@ public class Main {
         GPTModel model = buildDemoModel(demoConfig);
         System.out.println("    Model initialized successfully.");
 
-        // 3. Prompt setup: "every effort moves you" -> [1, 2, 5, 8]
+        // 3. Automated Benchmark & Verification Demo
+        System.out.println("\n[3] Automated Benchmark Demo (Prompt: 'every effort moves you'):");
         int[][] prompt = {{1, 2, 5, 8}};
-        System.out.println("\n[3] Input Prompt:");
-        printTokens("    Prompt Tokens: ", prompt[0], vocab);
+        printTokens("    Prompt Tokens: ", prompt[0], idToWord);
 
-        // 4. Mode 1: Deterministic Greedy Decoding (temperature = 0.0)
-        System.out.println("\n[4] Generation with Greedy Decoding (Temperature = 0.0, Argmax):");
         int[][] greedyOutput = model.generate(prompt, 5, contextLength, 0.0f, null, 9, null);
-        printTokens("    Generated Output: ", greedyOutput[0], vocab);
+        printTokens("    Greedy (temp=0.0): ", greedyOutput[0], idToWord);
 
-        // 5. Mode 2: Stochastic Sampling with Temperature & Top-K
-        float temperature = 0.8f;
-        int topK = 3;
         Random rng = new Random(42);
-        System.out.printf("\n[5] Generation with Stochastic Sampling (Temperature = %.1f, Top-K = %d):%n", temperature, topK);
-        int[][] sampledOutput = model.generate(prompt, 5, contextLength, temperature, topK, 9, rng);
-        printTokens("    Generated Output: ", sampledOutput[0], vocab);
+        int[][] sampledOutput = model.generate(prompt, 5, contextLength, 0.8f, 3, 9, rng);
+        printTokens("    Sampled (temp=0.8, top_k=3): ", sampledOutput[0], idToWord);
 
-        // 6. Evaluation Metric Demonstration
-        System.out.println("\n[6] Evaluation Engine Demonstration:");
         Tensor logits = model.forward(prompt);
-        // Ground truth targets: shifted inputs [2, 5, 8, 3] ("effort", "moves", "you", "forward")
         int[][] targets = {{2, 5, 8, 3}};
         float loss = LossUtils.crossEntropyLoss(logits, targets);
         float perplexity = LossUtils.perplexity(loss);
-        System.out.printf("    - Evaluated Tokens   : %d tokens%n", targets.length * targets[0].length);
-        System.out.printf("    - Cross-Entropy Loss : %.4f%n", loss);
-        System.out.printf("    - Perplexity (exp)   : %.2f (words model is torn between)%n", perplexity);
+        System.out.printf("    Loss: %.4f | Perplexity: %.2f%n", loss, perplexity);
+
+        // 4. Interactive Command-Line REPL
+        // Checks if an interactive console or stdin stream is available
+        Scanner scanner = new Scanner(System.in);
+        if (System.console() != null || (args.length > 0 && args[0].equalsIgnoreCase("--interactive"))) {
+            runInteractiveRepl(model, contextLength, idToWord, wordToId, scanner);
+        } else {
+            System.out.println("\n[Tip] To launch interactive live chat mode in terminal, run with: --interactive");
+        }
 
         System.out.println("\n========================================================================");
         System.out.println("   All 3 Chapters & Specs (Attention, GPT-2, Decoding) Complete!       ");
         System.out.println("========================================================================");
     }
 
+    private static void registerToken(Map<Integer, String> idToWord, Map<String, Integer> wordToId, int id, String word) {
+        idToWord.put(id, word);
+        wordToId.put(word.toLowerCase(), id);
+    }
+
+    private static void runInteractiveRepl(
+            GPTModel model,
+            int contextLength,
+            Map<Integer, String> idToWord,
+            Map<String, Integer> wordToId,
+            Scanner scanner
+    ) {
+        System.out.println("\n========================================================================");
+        System.out.println("               LIVE INTERACTIVE GENERATION REPL                         ");
+        System.out.println("========================================================================");
+        System.out.println("Available vocabulary words: " + wordToId.keySet());
+        System.out.println("Commands:");
+        System.out.println("  /temp <float>   : Set temperature (e.g. /temp 0.8 or /temp 0.0 for greedy)");
+        System.out.println("  /topk <int>     : Set top-k (e.g. /topk 3, or /topk 0 to disable)");
+        System.out.println("  /tokens <int>   : Set max new tokens to generate (e.g. /tokens 6)");
+        System.out.println("  exit / quit     : Exit the session");
+        System.out.println("------------------------------------------------------------------------");
+
+        float temperature = 0.8f;
+        Integer topK = 3;
+        int maxNewTokens = 5;
+        Random rng = new Random();
+
+        while (true) {
+            System.out.print("\n[User Prompt] > ");
+            if (!scanner.hasNextLine()) {
+                break;
+            }
+            String line = scanner.nextLine().trim();
+            if (line.isEmpty()) {
+                continue;
+            }
+            if (line.equalsIgnoreCase("exit") || line.equalsIgnoreCase("quit")) {
+                System.out.println("Exiting interactive session.");
+                break;
+            }
+
+            // Command handling
+            if (line.startsWith("/temp")) {
+                try {
+                    temperature = Float.parseFloat(line.substring(5).trim());
+                    System.out.printf("Temperature updated to: %.2f%n", temperature);
+                } catch (Exception e) {
+                    System.out.println("Usage: /temp <float> (e.g. /temp 0.7)");
+                }
+                continue;
+            }
+            if (line.startsWith("/topk")) {
+                try {
+                    int k = Integer.parseInt(line.substring(5).trim());
+                    topK = (k > 0) ? k : null;
+                    System.out.println("Top-K updated to: " + (topK != null ? topK : "disabled"));
+                } catch (Exception e) {
+                    System.out.println("Usage: /topk <int> (e.g. /topk 3)");
+                }
+                continue;
+            }
+            if (line.startsWith("/tokens")) {
+                try {
+                    maxNewTokens = Integer.parseInt(line.substring(7).trim());
+                    System.out.println("Max new tokens updated to: " + maxNewTokens);
+                } catch (Exception e) {
+                    System.out.println("Usage: /tokens <int> (e.g. /tokens 6)");
+                }
+                continue;
+            }
+
+            // Tokenize words
+            String[] words = line.split("\\s+");
+            List<Integer> tokenList = new ArrayList<>();
+            for (String w : words) {
+                String clean = w.replaceAll("[^a-zA-Z<>]", "").toLowerCase();
+                Integer id = wordToId.get(clean);
+                if (id != null) {
+                    tokenList.add(id);
+                } else {
+                    System.out.println("Warning: Word '" + w + "' not in vocabulary. Skipping.");
+                }
+            }
+
+            if (tokenList.isEmpty()) {
+                System.out.println("Error: No recognized tokens found in prompt. Try words like 'every effort moves you'");
+                continue;
+            }
+
+            int[][] promptIdx = new int[1][tokenList.size()];
+            for (int i = 0; i < tokenList.size(); i++) {
+                promptIdx[0][i] = tokenList.get(i);
+            }
+
+            System.out.printf("Generating %d tokens (temp=%.2f, topK=%s)...%n", maxNewTokens, temperature, topK);
+            int[][] result = model.generate(promptIdx, maxNewTokens, contextLength, temperature, topK, 9, rng);
+
+            printTokens("[GPT Output] -> ", result[0], idToWord);
+        }
+    }
+
     private static void printTokens(String label, int[] tokens, Map<Integer, String> vocab) {
         StringBuilder sb = new StringBuilder();
-        sb.append(label).append("[ ");
+        sb.append(label);
         for (int i = 0; i < tokens.length; i++) {
             int t = tokens[i];
             String word = vocab.getOrDefault(t, "token_" + t);
-            sb.append("\"").append(word).append("\"");
+            sb.append(word);
             if (i < tokens.length - 1) {
-                sb.append(", ");
+                sb.append(" ");
             }
         }
-        sb.append(" ]");
         System.out.println(sb);
     }
 
